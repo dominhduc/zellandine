@@ -1,0 +1,20 @@
+# Default configuration for Zellandine dream cycle.
+# Copy to ~/.hermes/zellandine/config.yaml and customize.
+
+schedule: "0 2 * * *"          # Nightly at 02:00 local
+depth: "full"                   # full (all 5 stages) | light (collect + consolidate only)
+apply_mode: "manual"            # manual | auto-high-confidence | dry-run
+max_proposals: 5
+min_confidence: 0.8             # Minimum confidence to stage a proposal
+auto_apply_threshold: 0.9       # Minimum for auto-apply (if mode=auto)
+session_lookback: 14            # Sessions to scan
+deliver: "telegram"             # telegram | local | none
+obsidian_enabled: true
+obsidian_vault: "~/Documents/ObsidianVault"
+allow_soul_changes: false
+forgetting:
+  enabled: true
+  half_life_days: 180
+  archive_threshold: 0.1
+  min_age_days: 90
+model: null                     # null = use current Hermes model

@@ -1,0 +1,9 @@
+name: zellandine
+version: "0.1.0"
+description: "Sleep-inspired memory consolidation, skill evolution, and self-reflection for Hermes Agent. Dreams on recent sessions, stages proposed changes safely, wakes up smarter."
+author: "Duc Do"
+license: "MIT"
+kind: standalone
+provides_tools: []
+hooks:
+  - on_session_end
