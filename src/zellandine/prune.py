@@ -6,6 +6,7 @@ and stale knowledge for removal.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 
 from .consolidate import Proposal
@@ -67,6 +68,62 @@ def score_entry(
         age_days=age_days,
         recommendation=recommendation,
     )
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-zA-Z0-9]{4,}", text.lower())}
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def find_duplicate_entries(
+    entries: list[str], *, threshold: float = 0.5
+) -> list[Proposal]:
+    """Detect near-duplicate memory entries and propose consolidating them.
+
+    Metadata-free (needs no age/reference data): compares entries pairwise by
+    word-set Jaccard similarity. For each duplicate pair, emits a low-priority,
+    low-confidence ``replace`` suggestion that points at the (shorter) redundant
+    entry — surfaced for human review, never auto-applied. Each redundant entry
+    is flagged at most once.
+    """
+    proposals: list[Proposal] = []
+    flagged: set[int] = set()
+    word_sets = [_words(e) for e in entries]
+    for i in range(len(entries)):
+        if i in flagged:
+            continue
+        for j in range(i + 1, len(entries)):
+            if j in flagged:
+                continue
+            if _jaccard(word_sets[i], word_sets[j]) < threshold:
+                continue
+            # Keep the longer (more informative) entry; remove the shorter one.
+            keep, drop = (i, j) if len(entries[i]) >= len(entries[j]) else (j, i)
+            flagged.add(drop)
+            proposals.append(
+                Proposal(
+                    id=f"prune-dup-{drop:03d}",
+                    target="memory",
+                    action="remove",
+                    content="",
+                    reason=(
+                        "Near-duplicate of another memory entry "
+                        f"(similarity ≥ {threshold}); kept: \"{entries[keep][:60]}\". "
+                        "Remove the redundant copy to reduce drift."
+                    ),
+                    confidence=0.6,
+                    risk="low",
+                    priority="low",
+                    target_entry=entries[drop][:100],
+                )
+            )
+            break  # entry i paired; move on
+    return proposals
 
 
 def prune(

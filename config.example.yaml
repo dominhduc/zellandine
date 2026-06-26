@@ -12,6 +12,22 @@ deliver: "telegram"             # telegram | local | none
 obsidian_enabled: true
 obsidian_vault: "~/Documents/ObsidianVault"
 allow_soul_changes: false
+
+# LLM provider for the consolidate/synthesize stages.
+# provider: "offline" → zero-cost heuristic marker scan (default, $0).
+# Use a preset name (openrouter | zai | zai-coding | glm | groq) OR set
+# base_url/api_key_env/model explicitly. The API key is read from the env
+# var named by api_key_env (typically loaded from ~/.hermes/.env) — never
+# put the key itself in this file.
+llm:
+  provider: "offline"           # offline | openrouter | zai | zai-coding | glm | groq | openai-compatible
+  base_url: ""                  # overrides the preset endpoint
+  api_key_env: ""               # e.g. OPENROUTER_API_KEY / GLM_API_KEY / GROQ_API_KEY
+  model: ""                     # e.g. z-ai/glm-4.6
+  temperature: 0.3
+  max_tokens: 4096
+  timeout: 45                   # per-call timeout (s); a hung endpoint degrades to offline
+
 forgetting:
   enabled: true
   half_life_days: 180

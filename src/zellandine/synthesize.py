@@ -68,18 +68,62 @@ def synthesize(
     collected: CollectionResult,
     proposals: list[Proposal],
     *,
+    provider: Any = None,
+    max_insights: int = 3,
     model: str | None = None,
 ) -> SynthesisResult:
-    """REM synthesis pass — cross-session pattern detection.
+    """REM synthesis pass — cross-session pattern detection (Stage 4).
 
-    Second LLM pass (higher temperature): receives episodes + proposals
-    and looks for:
-    1. Recurring themes across sessions
-    2. Non-obvious connections between episodes
-    3. Behavioural drift from stated preferences
-    4. 1-3 novel insights worth surfacing
-
-    Insights are NOT committed to memory — they go in the report for human review.
+    Second provider pass (higher temperature): episodes + proposals → insights.
+    Insights are NOT committed to memory — they surface in the report only.
     """
-    # TODO: Implement in Phase 2
-    return SynthesisResult()
+    if provider is None:
+        from .providers import OfflineMarkerProvider
+
+        provider = OfflineMarkerProvider()
+
+    if not collected.episodes:
+        return SynthesisResult(model_used=getattr(provider, "name", ""))
+
+    from .consolidate import _parse_json_array
+
+    proposals_text = "\n".join(
+        f"- [{p.target}/{p.action}] {p.content} (conf {p.confidence})" for p in proposals
+    ) or "(none)"
+
+    try:
+        raw = provider.synthesize(collected.to_prompt_block(), proposals_text)
+    except Exception as exc:
+        # REM synthesis is best-effort — never crash the cycle over it.
+        import logging
+
+        logging.getLogger("zellandine").warning("synthesis provider failed: %s", exc)
+        return SynthesisResult(model_used=f"{getattr(provider, 'name', '')} (error: {exc})")
+    parsed = _parse_json_array(raw)
+
+    insights: list[Insight] = []
+    valid_types = {"pattern", "connection", "suggestion", "drift_alert"}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        itype = str(item.get("type", "pattern")).lower().strip()
+        content = str(item.get("content", "")).strip()
+        if not content:
+            continue
+        try:
+            conf = max(0.0, min(1.0, float(item.get("confidence", 0.5))))
+        except (TypeError, ValueError):
+            conf = 0.5
+        insights.append(
+            Insight(
+                type=itype if itype in valid_types else "pattern",
+                content=content,
+                evidence=str(item.get("evidence", "")).strip(),
+                confidence=conf,
+            )
+        )
+
+    return SynthesisResult(
+        insights=insights[:max_insights],
+        model_used=getattr(provider, "name", ""),
+    )

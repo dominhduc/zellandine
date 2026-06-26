@@ -21,7 +21,7 @@ class ProviderError(RuntimeError):
 class DreamProvider(Protocol):
     name: str
 
-    def consolidate(self, episodes_text: str, context: str) -> str:
+    def consolidate(self, episodes_text: str, context: Any = "") -> str:
         """Stage 2: episodes → LLM analysis (JSON proposals text)."""
         raise NotImplementedError
 
@@ -43,7 +43,7 @@ class OfflineMarkerProvider:
 
     name = "offline-marker"
 
-    def consolidate(self, episodes_text: str, context: str) -> str:
+    def consolidate(self, episodes_text: str, context: Any = "") -> str:
         proposals = []
         for i, line in enumerate(episodes_text.splitlines(), 1):
             match = MARKER_RE.match(line)
@@ -81,12 +81,16 @@ class OpenAICompatibleProvider:
         model: str,
         temperature: float = 0.3,
         max_tokens: int = 4096,
+        timeout: float = 45.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        # Bounds each call so a slow/hung endpoint can't run the whole cycle
+        # past Hermes' cron script limit.
+        self.timeout = timeout
 
     def _call(self, system_prompt: str, user_prompt: str) -> str:
         """Make a single chat completion call."""
@@ -112,7 +116,7 @@ class OpenAICompatibleProvider:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
                 return body["choices"][0]["message"]["content"]
         except urllib.error.HTTPError as exc:
@@ -120,31 +124,24 @@ class OpenAICompatibleProvider:
         except Exception as exc:
             raise ProviderError(f"LLM call failed: {exc}") from exc
 
-    def consolidate(self, episodes_text: str, context: str) -> str:
-        system = (
-            "You are a memory consolidation engine. Analyze the following "
-            "session episodes and current memory state. Output a JSON array of "
-            "proposals for memory, user profile, or skill changes. "
-            "Each proposal needs: id, target (memory|user|skill), action "
-            "(add|replace|remove|patch), content, reason, confidence (0-1), "
-            "risk (low|medium|high), priority (low|normal|high). "
-            "Maximum 5 proposals. Be conservative — only propose what you're confident about."
+    def consolidate(self, episodes_text: str, context: Any = "") -> str:
+        from .prompts import consolidation_prompts
+
+        system, user_tmpl = consolidation_prompts()
+        ctx = _as_context(context)
+        user = user_tmpl.format(
+            current_memory=ctx.get("memory", ""),
+            current_user=ctx.get("user", ""),
+            skill_list=ctx.get("skills", ""),
+            episodes=episodes_text,
         )
-        user = f"## Current state\n{context}\n\n## Episodes\n{episodes_text}\n\n## Proposals (JSON):"
         return self._call(system, user)
 
     def synthesize(self, episodes_text: str, proposals_text: str) -> str:
-        system = (
-            "You are a REM-sleep synthesis engine. Look across the episodes and "
-            "proposals for non-obvious patterns, recurring themes, behavioural drift, "
-            "and novel connections. Output a JSON array of insights. "
-            "Each insight needs: type (pattern|connection|suggestion|drift_alert), "
-            "content, evidence, confidence (0-1). "
-            "Maximum 3 insights. Be speculative but grounded in evidence."
-        )
-        user = (
-            f"## Episodes\n{episodes_text}\n\n## Proposals\n{proposals_text}\n\n## Insights (JSON):"
-        )
+        from .prompts import synthesis_prompts
+
+        system, user_tmpl = synthesis_prompts()
+        user = user_tmpl.format(episodes=episodes_text, proposals=proposals_text)
         # Higher temperature for REM
         old_temp = self.temperature
         self.temperature = 0.6
@@ -152,3 +149,10 @@ class OpenAICompatibleProvider:
             return self._call(system, user)
         finally:
             self.temperature = old_temp
+
+
+def _as_context(context: Any) -> dict[str, str]:
+    """Normalise a context arg (str or dict) into the template field dict."""
+    if isinstance(context, dict):
+        return {k: str(v) for k, v in context.items()}
+    return {"memory": str(context or ""), "user": "", "skills": ""}

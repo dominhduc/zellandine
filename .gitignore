@@ -30,6 +30,9 @@ artifacts/
 backup/
 *.dream-state.json
 
+# Internal dev log (not for public repo)
+docs/PLAN.md
+
 # OS
 .DS_Store
 Thumbs.db

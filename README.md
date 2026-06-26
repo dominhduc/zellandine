@@ -160,7 +160,7 @@ python -m pip install -e ".[dev]"
 pytest -q
 ```
 
-See [`docs/architecture.md`](docs/architecture.md) for the full design and [`docs/PLAN.md`](docs/PLAN.md) for deployment notes against a live Hermes (Alfred) instance.
+See [`docs/architecture.md`](docs/architecture.md) for the full design.
 
 ## License
 

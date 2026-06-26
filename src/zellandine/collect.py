@@ -4,6 +4,7 @@ Gather raw material from recent Hermes sessions and cron outputs.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -73,6 +74,53 @@ class CollectionResult:
         return "\n".join(lines) + "\n"
 
 
+# Heuristic cues for classifying a user turn into an episode type.
+# Ordered by priority — first match wins.
+_CLASSIFIERS: list[tuple[str, tuple[str, ...]]] = [
+    ("correction", (
+        "no.", "no,", "not ", "don't", "do not", "never", "stop ", "wrong",
+        "actually", "instead", "i said", "i told you", "again", "incorrect",
+        "không phải", "đừng", "sai", "lại", "đã bảo",
+    )),
+    ("preference", (
+        "i prefer", "i like", "i want", "always ", "from now", "please use",
+        "i'd rather", "make sure", "remember", "tôi muốn", "tôi thích", "nhớ",
+    )),
+    ("decision", (
+        "let's ", "we'll ", "go with", "decided", "use ", "build ", "create ",
+        "i'll ", "we call this", "name it", "move ", "draft",
+    )),
+    ("task", (
+        "can you", "could you", "please ", "run ", "find ", "fix ", "add ",
+        "implement", "write ", "check ", "look ", "set up", "help me",
+    )),
+]
+
+
+def _classify(text: str) -> tuple[str, str]:
+    """Return (episode_type, severity) for a user turn."""
+    low = text.lower()
+    for etype, cues in _CLASSIFIERS:
+        if any(cue in low for cue in cues):
+            severity = "high" if etype == "correction" else "normal"
+            return etype, severity
+    return "info", "low"
+
+
+def _match_existing_memory(text: str, memory_entries: list[str]) -> str | None:
+    """Crude overlap match: does an existing memory entry share salient words?"""
+    words = {w for w in re.findall(r"[a-zA-Z]{5,}", text.lower())}
+    if not words:
+        return None
+    best, best_overlap = None, 0
+    for entry in memory_entries:
+        ewords = {w for w in re.findall(r"[a-zA-Z]{5,}", entry.lower())}
+        overlap = len(words & ewords)
+        if overlap > best_overlap:
+            best, best_overlap = entry, overlap
+    return best[:160] if best and best_overlap >= 3 else None
+
+
 def collect(
     session_limit: int = 14,
     *,
@@ -80,16 +128,75 @@ def collect(
 ) -> CollectionResult:
     """Collect episodes from recent Hermes sessions and cron outputs.
 
-    This is the main entry point for Stage 1. It:
-    1. Reads recent sessions via the session database
-    2. Reads cron output logs for errors/anomalies
-    3. Extracts salient episodes
-
-    Returns a CollectionResult ready for Stage 2 (consolidation).
+    Stage 1 (Sleep Onset): read recent sessions + cron output, extract salient
+    user turns, classify them, and note matches against existing memory.
     """
-    # TODO: Implement in Phase 1
-    # - Read session DB (hermes_state.SessionDB or direct SQLite)
-    # - Scan cron outputs in ~/.hermes/cron/output/
-    # - Extract user turns, corrections, decisions, errors
-    # - Classify into episode types
-    return CollectionResult()
+    from . import hermes_api
+
+    memory = hermes_api.read_memory()
+    mem_entries = memory.get("memory", []) + memory.get("user", [])
+
+    digests = hermes_api.read_session_digests(limit=session_limit)
+    episodes: list[Episode] = []
+    for d in digests:
+        sid = d.get("session_id")
+        ts = _coerce_ts(d.get("started_at"))
+        for turn in d.get("user_turns", []):
+            turn = _clean_turn(turn)
+            if len(turn) < 12:
+                continue
+            etype, severity = _classify(turn)
+            episodes.append(
+                Episode(
+                    source=f"session:{sid}",
+                    timestamp=ts,
+                    type=etype,
+                    content=turn,
+                    severity=severity,
+                    existing_memory_match=_match_existing_memory(turn, mem_entries),
+                    session_id=sid,
+                )
+            )
+
+    cron_errors: list[str] = []
+    for c in hermes_api.read_cron_outputs():
+        if c.get("has_error"):
+            cron_errors.append(
+                f"{c.get('name')} ({c.get('job_id')}): error in {c.get('path')}"
+            )
+            episodes.append(
+                Episode(
+                    source=f"cron:{c.get('job_id')}",
+                    timestamp=datetime.fromtimestamp(
+                        c.get("mtime", 0), timezone.utc
+                    ).isoformat(),
+                    type="error",
+                    content=(
+                        f"Cron job '{c.get('name')}' reported an error. "
+                        f"Excerpt: {c.get('excerpt', '')[:200]}"
+                    ),
+                    severity="high",
+                    session_id=None,
+                )
+            )
+
+    return CollectionResult(
+        episodes=episodes,
+        session_count=len(digests),
+        cron_errors=cron_errors,
+    )
+
+
+def _clean_turn(text: str) -> str:
+    # Strip the system-injected reply-quote prefix Hermes adds.
+    text = re.sub(r"^\[Replying to:.*?\]\s*", "", text, flags=re.DOTALL)
+    return text.strip()
+
+
+def _coerce_ts(started: Any) -> str:
+    if started is None:
+        return datetime.now(timezone.utc).isoformat()
+    try:
+        return datetime.fromtimestamp(float(started), timezone.utc).isoformat()
+    except (TypeError, ValueError):
+        return str(started)

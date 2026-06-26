@@ -5,5 +5,8 @@ author: "Duc Do"
 license: "MIT"
 kind: standalone
 provides_tools: []
-hooks:
-  - on_session_end
+# Zellandine integrates via a nightly script-only (no_agent) cron job that runs
+# the dream cycle and delivers a digest — registered with `zellandine install-cron`.
+# It intentionally registers no runtime hooks: consolidation is a scheduled,
+# idle-time activity, not a per-session one.
+hooks: []

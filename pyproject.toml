@@ -10,7 +10,7 @@ readme = "README.md"
 license = {file = "LICENSE"}
 requires-python = ">=3.11"
 authors = [
-  {name = "Duc Do", email = "do.bruce92@gmail.com"},
+  {name = "Duc Do", email = "dominhduc@users.noreply.github.com"},
 ]
 keywords = ["hermes", "agent", "memory", "dreaming", "consolidation", "self-improving"]
 classifiers = [

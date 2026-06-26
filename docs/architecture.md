@@ -1,4 +1,4 @@
-# Hermes Dream — Architecture Document
+# Zellandine — Architecture Document
 
 > **A native dreaming system for Hermes Agent.** Sleep-inspired memory consolidation, skill evolution, and self-reflection — built on Hermes' own APIs, safe by design, contributing back to the community.
 
@@ -25,7 +25,7 @@ Hermes has all the **primitives** — `memory()`, `skill_manage()`, `session_sea
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    HERMES DREAM CYCLE                            │
+│                      ZELLANDINE DREAM CYCLE                     │
 │                   (cron: nightly, configurable)                  │
 │                                                                 │
 │  ┌──────────┐    ┌──────────────┐    ┌──────────┐    ┌───────┐ │
@@ -84,7 +84,7 @@ Hermes has all the **primitives** — `memory()`, `skill_manage()`, `session_sea
   "timestamp": "2026-06-24T15:30:00+07:00",
   "type": "correction",
   "content": "User corrected greeting time: said 'Good morning' at 20:00",
-  "existing_memory_match": "Based in Hanoi... NEVER greet with assumed time-of-day",
+  "existing_memory_match": "User in UTC+7... NEVER greet with assumed time-of-day",
   "severity": "high"
 }
 ```
@@ -120,9 +120,9 @@ The model outputs proposals in structured JSON:
     "id": "dream-002",
     "target": "skill",
     "action": "patch",
-    "skill_name": "alfred-email-deletion",
-    "old_string": "Dán nhãn: /usr/local/bin/alfred-email apply label:X \"subject:...\" is:unread",
-    "new_string": "Dán nhãn: /usr/local/bin/alfred-email apply label:X \"subject:...\" (NEVER use is:unread)",
+    "skill_name": "email-triage",
+    "old_string": "Label: email-cli apply label:X \"subject:...\" is:unread",
+    "new_string": "Label: email-cli apply label:X \"subject:...\" (NEVER use is:unread)",
     "reason": "is:unread race condition caused silent labelling failures",
     "confidence": 0.90,
     "risk": "medium",
@@ -221,45 +221,41 @@ Before any apply:
 ## 6. Plugin Structure
 
 ```
-dreaming/
+zellandine/
 ├── plugin.yaml              # Hermes plugin manifest
-├── SKILL.md                 # Human-readable skill (loaded by agent on demand)
 ├── README.md                # Community docs
-├── architecture.md          # This document
+├── config.example.yaml      # Annotated config template
+├── docs/
+│   └── architecture.md      # This document
 ├── pyproject.toml           # Python package config
 ├── src/
-│   └── dreaming/
+│   └── zellandine/
 │       ├── __init__.py
-│       ├── cli.py           # `dreaming review|apply|revert|status|install-cron`
+│       ├── cli.py           # `zellandine run|review|apply|revert|status|install-cron|digest`
 │       ├── collect.py       # Stage 1: session + cron data gathering
 │       ├── consolidate.py   # Stage 2: episode → proposal extraction
-│       ├── prune.py         # Stage 3: scoring + decay + dedup
+│       ├── prune.py         # Stage 3: scoring + decay + dedup (importance scoring lives here)
 │       ├── synthesize.py    # Stage 4: REM pattern detection
-│       ├── report.py        # Stage 5: report + delivery
+│       ├── report.py        # Stage 5: report + Telegram digest
 │       ├── artifact.py      # Artifact read/write/validate
-│       ├── scoring.py       # Importance scoring + forgetting curves
 │       ├── hermes_api.py    # Thin wrapper: calls memory(), skill_manage(), session_search()
-│       ├── providers.py     # LLM provider abstraction (offline, openai-compatible)
+│       ├── providers.py     # LLM provider abstraction (offline-marker, openai-compatible)
 │       └── state.py         # Dream state persistence (timestamps, counters)
 ├── scripts/
 │   └── dream_cycle.sh       # Cron entry point (script-only, no agent tokens)
 ├── templates/
 │   ├── consolidation_prompt.txt   # Stage 2 LLM prompt
-│   ├── synthesis_prompt.txt       # Stage 4 LLM prompt
-│   └── telegram_digest.txt        # Stage 5 delivery template
-├── examples/
-│   └── quickstart/          # Offline fixture for demo/testing
+│   └── synthesis_prompt.txt       # Stage 4 LLM prompt
 └── tests/
-    ├── test_artifact.py
-    ├── test_scoring.py
-    ├── test_collect.py
-    └── test_safety.py
+    └── test_zellandine.py   # Scoring, artifact, provider, state, report coverage
 ```
+
+> **Planned, not yet present:** `SKILL.md` (conversational skill entry point, referenced in §9) and an `examples/quickstart/` offline fixture.
 
 ## 7. Configuration
 
 ```yaml
-# ~/.hermes/dreaming/config.yaml
+# ~/.hermes/zellandine/config.yaml
 schedule: "0 2 * * *"          # Nightly at 02:00 local
 depth: "full"                   # "light" (collect+consolidate only) | "full" (all 5 stages)
 apply_mode: "manual"            # "manual" | "auto-high-confidence" | "dry-run"
@@ -281,7 +277,7 @@ model: null                     # null = use current Hermes model
 
 ## 8. Unique Value Proposition (vs existing repos)
 
-| Feature | Hermes Dream | Pluton | hermes-dreaming | Auto-Dream | ScallopBot | REM-Sleep |
+| Feature | Zellandine | Pluton | hermes-dreaming | Auto-Dream | ScallopBot | REM-Sleep |
 |---------|:------------:|:------:|:---------------:|:----------:|:----------:|:---------:|
 | Uses native `memory()` API | ✅ | ❌ (flat file) | ❌ (flat file) | ❌ | ❌ | ❌ |
 | Uses native `skill_manage()` | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -295,7 +291,7 @@ model: null                     # null = use current Hermes model
 | Cron-native | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | Zero-vector-DB | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 
-**The key differentiator:** Every other plugin creates a *parallel memory store*. Hermes Dream operates on Hermes' *actual* memory and skill APIs — no second source of truth, no sync issues, no format mismatch.
+**The key differentiator:** Every other plugin creates a *parallel memory store*. Zellandine operates on Hermes' *actual* memory and skill APIs — no second source of truth, no sync issues, no format mismatch.
 
 ## 9. API Surface (for community contribution)
 
@@ -303,25 +299,25 @@ model: null                     # null = use current Hermes model
 
 ```bash
 # Run a dream cycle (manual or triggered by cron)
-dreaming run [--depth full|light] [--dry-run]
+zellandine run [--depth full|light] [--dry-run]
 
 # Review staged proposals
-dreaming review [--latest | <artifact-id>]
+zellandine review [--latest | <artifact-id>]
 
 # Apply approved proposals
-dreaming apply <artifact-id> [--auto] [--dry-run]
+zellandine apply <artifact-id> [--auto] [--dry-run]
 
 # Revert an applied artifact
-dreaming revert <artifact-id>
+zellandine revert <artifact-id>
 
 # Show status
-dreaming status
+zellandine status
 
 # Install/update nightly cron
-dreaming install-cron [--schedule "0 2 * * *"]
+zellandine install-cron [--schedule "0 2 * * *"]
 
 # Render digests
-dreaming digest <artifact-id> [--weekly]
+zellandine digest <artifact-id> [--weekly]
 ```
 
 ### Hermes Skill (SKILL.md)
@@ -330,14 +326,14 @@ The bundled skill lets the user trigger a dream cycle conversationally:
 
 ```
 User: "Dream on today's sessions"
-Agent: loads `dreaming` skill → runs consolidation → presents proposals → asks to apply
+Agent: loads `zellandine` skill → runs consolidation → presents proposals → asks to apply
 ```
 
 ### Cron Integration
 
 ```bash
 # Script-only nightly cycle (no agent tokens spent on orchestration)
-dreaming install-cron --schedule "0 2 * * *"
+zellandine install-cron --schedule "0 2 * * *"
 # Creates a Hermes cron job with no_agent=true, script=dream_cycle.sh
 ```
 

@@ -75,7 +75,7 @@ def generate_report(
     lines.extend([
         "---",
         "",
-        f"_Zellandine v0.1.0 — _La Belle au Bois Dormant_",
+        "_Zellandine v0.1.0 — La Belle au Bois Dormant_",
     ])
 
     return "\n".join(lines)

@@ -101,10 +101,177 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 0
 
-    # Commands will be dispatched to handler modules
-    # For now, each returns a helpful message
-    print(f"[zellandine] Command '{args.command}' — not yet implemented.")
-    print(f"[zellandine] This is a scaffold. Implementation coming in Phase 1.")
+    handlers = {
+        "run": _cmd_run,
+        "review": _cmd_review,
+        "apply": _cmd_apply,
+        "revert": _cmd_revert,
+        "status": _cmd_status,
+        "install-cron": _cmd_install_cron,
+        "digest": _cmd_digest,
+    }
+    handler = handlers.get(args.command)
+    if handler is None:
+        parser.print_help()
+        return 1
+    try:
+        return handler(args)
+    except Exception as exc:  # surface errors cleanly for cron logs
+        print(f"[zellandine] error in '{args.command}': {exc}", file=sys.stderr)
+        return 1
+
+
+def _artifact_root(args) -> Path:
+    from .run import default_artifact_root
+
+    return getattr(args, "artifact_root", None) or default_artifact_root()
+
+
+def _resolve_artifact(artifact_id: str | None, root: Path) -> Path | None:
+    from .artifact import find_latest_artifact
+
+    if not artifact_id or artifact_id == "--latest":
+        return find_latest_artifact(root)
+    p = root / artifact_id
+    return p if p.exists() else None
+
+
+def _cmd_run(args) -> int:
+    from .config import load_config
+    from .run import run_cycle
+
+    cfg = load_config()
+    summary = run_cycle(
+        config=cfg,
+        depth=args.depth,
+        dry_run=args.dry_run,
+        session_limit=args.sessions,
+        artifact_root=getattr(args, "artifact_root", None),
+    )
+    print(f"🌙 Dream cycle complete — {summary['artifact_id']}")
+    print(
+        f"   sessions={summary['session_count']} episodes={summary['episode_count']} "
+        f"proposals={summary['proposal_count']} insights={summary['insight_count']} "
+        f"provider={summary['provider']}"
+    )
+    if summary["artifact_path"]:
+        print(f"   artifact: {summary['artifact_path']}")
+    else:
+        print("   (dry-run — nothing written)")
+    print()
+    print(summary["digest"])
+    return 0
+
+
+def _cmd_review(args) -> int:
+    root = _artifact_root(args)
+    path = _resolve_artifact(args.artifact_id, root)
+    if path is None:
+        print("[zellandine] no artifact found.")
+        return 1
+    report = path / "report.md"
+    if report.exists():
+        print(report.read_text(encoding="utf-8"))
+    else:
+        print(f"[zellandine] artifact at {path} has no report.md")
+    print(f"\n[zellandine] proposals: {path / 'proposals.jsonl'}")
+    print("[zellandine] to apply: zellandine apply", path.name, "--auto  (or mark 'approved' in proposals.jsonl)")
+    return 0
+
+
+def _cmd_apply(args) -> int:
+    from .apply import apply_artifact
+    from .config import load_config
+
+    cfg = load_config()
+    root = _artifact_root(args)
+    path = _resolve_artifact(args.artifact_id, root)
+    if path is None:
+        print("[zellandine] no artifact found.")
+        return 1
+    result = apply_artifact(
+        path,
+        auto=args.auto,
+        auto_threshold=cfg.auto_apply_threshold,
+        dry_run=args.dry_run,
+        priority=args.priority,
+        target_kind=args.target_kind,
+    )
+    print(f"[zellandine] apply {path.name}: {result}")
+    return 0
+
+
+def _cmd_revert(args) -> int:
+    from .apply import revert_artifact
+
+    root = _artifact_root(args)
+    path = _resolve_artifact(args.artifact_id, root)
+    if path is None:
+        print("[zellandine] no artifact found.")
+        return 1
+    if not args.yes:
+        print(f"[zellandine] this will restore memory from {path.name}/backup. Re-run with --yes.")
+        return 1
+    print(f"[zellandine] revert: {revert_artifact(path)}")
+    return 0
+
+
+def _cmd_status(args) -> int:
+    from . import state
+    from .artifact import find_latest_artifact
+
+    s = state.read_state()
+    print("🌙 Zellandine status")
+    print(f"   last dream: {s.get('last_dream_at') or 'never'}")
+    print(f"   total cycles: {s.get('total_cycles', 0)}")
+    print(f"   total proposals: {s.get('total_proposals', 0)}")
+    print(f"   total applied: {s.get('total_applied', 0)}")
+    latest = find_latest_artifact(_artifact_root(args))
+    print(f"   latest artifact: {latest.name if latest else 'none'}")
+    return 0
+
+
+def _cmd_install_cron(args) -> int:
+    from . import hermes_api
+    from .install import ensure_cron_script
+
+    script_rel = ensure_cron_script()
+    try:
+        job = hermes_api.create_cron_job(
+            name="Zellandine Dream Cycle",
+            schedule=args.schedule,
+            script=script_rel,
+            deliver="telegram",
+        )
+        print(f"[zellandine] cron job registered: {job.get('id', job)}")
+        print(f"   schedule: {args.schedule}  script: {script_rel}  (no_agent, delivers to telegram)")
+    except Exception as exc:
+        print(f"[zellandine] could not register cron job automatically: {exc}", file=sys.stderr)
+        print(f"   The cycle script is installed at ~/.hermes/scripts/{script_rel}")
+        print("   Register it manually via Hermes' cronjob tool (no_agent=true).")
+        return 1
+    return 0
+
+
+def _cmd_digest(args) -> int:
+    root = _artifact_root(args)
+    path = _resolve_artifact(args.artifact_id, root)
+    if path is None:
+        print("[zellandine] no artifact found.")
+        return 1
+    from .artifact import read_manifest, read_proposals
+    from .consolidate import Proposal
+    from .report import generate_telegram_digest
+
+    manifest = read_manifest(path)
+    raw = read_proposals(path)
+    proposals = [Proposal(**{k: v for k, v in p.items()
+                             if k in Proposal.__dataclass_fields__}) for p in raw]
+    print(generate_telegram_digest(
+        artifact_id=manifest.artifact_id,
+        episode_count=manifest.episode_count,
+        proposals=proposals,
+    ))
     return 0
 
 
